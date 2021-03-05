@@ -21,6 +21,9 @@ import redis_backup
 import resource_constraint
 import specific_function
 
+from clickhouse_backup import ClickHouse
+from common.classes import JobsBlock
+
 try:
     import version
 except ImportError as err:
@@ -71,57 +74,38 @@ def do_backup(path_to_config, jobs_name):
         general_function.print_info(f"{msg}")
         sys.exit(1)
 
+    final_jobs_list = []
+
     log_and_mail.writelog('INFO', "Starting script.\n", config.filelog_fd)
 
-    if jobs_name == 'all':
-        log_and_mail.writelog('INFO', "Starting files block backup.", config.filelog_fd)
-        for i in list(file_jobs_dict.keys()):
-            current_jobs_name = file_jobs_dict[i]['job']
-            execute_job(current_jobs_name, file_jobs_dict[i])
-        log_and_mail.writelog('INFO', "Finishing files block backup.", config.filelog_fd)
+    if jobs_name in list(db_jobs_dict.keys()):
+        final_jobs_list.append(JobsBlock("databases", [db_jobs_dict[jobs_name]]))
 
-        log_and_mail.writelog('INFO', "Starting databases block backup.", config.filelog_fd)
-        for i in list(db_jobs_dict.keys()):
-            current_jobs_name = db_jobs_dict[i]['job']
-            execute_job(current_jobs_name, db_jobs_dict[i])
-        log_and_mail.writelog('INFO', "Finishing databases block backup.\n", config.filelog_fd)
+    elif jobs_name in list(file_jobs_dict.keys()):
+        final_jobs_list.append(JobsBlock("files", [db_jobs_dict[jobs_name]]))
 
-        log_and_mail.writelog('INFO', "Starting external block backup.", config.filelog_fd)
-        for i in list(external_jobs_dict.keys()):
-            current_jobs_name = external_jobs_dict[i]['job']
-            execute_job(current_jobs_name, external_jobs_dict[i])
-        log_and_mail.writelog('INFO', "Finishing external block backup.\n", config.filelog_fd)
+    elif jobs_name in list(external_jobs_dict.keys()):
+        final_jobs_list.append(JobsBlock("external", [db_jobs_dict[jobs_name]]))
+
     elif jobs_name == 'databases':
-        log_and_mail.writelog('INFO', "Starting databases block backup.", config.filelog_fd)
-        for i in list(db_jobs_dict.keys()):
-            current_jobs_name = db_jobs_dict[i]['job']
-            execute_job(current_jobs_name, db_jobs_dict[i])
-        log_and_mail.writelog('INFO', "Finishing databases block backup.\n", config.filelog_fd)
+        final_jobs_list.append(JobsBlock("databases", db_jobs_dict))
+
     elif jobs_name == 'files':
-        log_and_mail.writelog('INFO', "Starting files block backup.", config.filelog_fd)
-        for i in list(file_jobs_dict.keys()):
-            current_jobs_name = file_jobs_dict[i]['job']
-            execute_job(current_jobs_name, file_jobs_dict[i])
-        log_and_mail.writelog('INFO', "Finishing files block backup.\n", config.filelog_fd)
+        final_jobs_list.append(JobsBlock("files", file_jobs_dict))
+
     elif jobs_name == 'external':
-        log_and_mail.writelog('INFO', "Starting external block backup.", config.filelog_fd)
-        for i in list(external_jobs_dict.keys()):
-            current_jobs_name = external_jobs_dict[i]['job']
-            execute_job(current_jobs_name, external_jobs_dict[i])
-        log_and_mail.writelog('INFO', "Finishing external block backup.\n", config.filelog_fd)
+        final_jobs_list.append(JobsBlock("external", external_jobs_dict))
+
     else:
-        if jobs_name in list(db_jobs_dict.keys()):
-            log_and_mail.writelog('INFO', "Starting databases block backup.", config.filelog_fd)
-            execute_job(jobs_name, db_jobs_dict[jobs_name])
-            log_and_mail.writelog('INFO', "Finishing databases block backup.\n", config.filelog_fd)
-        elif jobs_name in list(file_jobs_dict.keys()):
-            log_and_mail.writelog('INFO', "Starting files block backup.", config.filelog_fd)
-            execute_job(jobs_name, file_jobs_dict[jobs_name])
-            log_and_mail.writelog('INFO', "Finishing files block backup.\n", config.filelog_fd)
-        else:
-            log_and_mail.writelog('INFO', "Starting external block backup.", config.filelog_fd)
-            execute_job(jobs_name, external_jobs_dict[jobs_name])
-            log_and_mail.writelog('INFO', "Finishing external block backup.\n", config.filelog_fd)
+        final_jobs_list.append(JobsBlock("files", file_jobs_dict))
+        final_jobs_list.append(JobsBlock("databases", db_jobs_dict))
+        final_jobs_list.append(JobsBlock("external", external_jobs_dict))
+
+    for item in final_jobs_list:
+        log_and_mail.writelog('INFO', item.start_message, config.filelog_fd)
+        for job_name, job in item.jobs.items():
+            execute_job(job_name, job)
+        log_and_mail.writelog('INFO', item.finish_message, config.filelog_fd)
 
     log_and_mail.writelog('INFO', "Stopping script.", config.filelog_fd)
 
@@ -139,7 +123,13 @@ def execute_job(job_name, job_data):
 
     backup_type = job_data['type']
 
-    if backup_type == 'mysql':
+    if backup_type == 'desc_files':
+        desc_files_backup.desc_files_backup(job_data)
+
+    elif backup_type == 'inc_files':
+        inc_files_backup.inc_files_backup(job_data)
+
+    elif backup_type == 'mysql':
         mysql_backup.mysql_backup(job_data)
 
     elif backup_type == 'mysql_xtrabackup':
@@ -157,11 +147,13 @@ def execute_job(job_name, job_data):
     elif backup_type == 'redis':
         redis_backup.redis_backup(job_data)
 
-    elif backup_type == 'desc_files':
-        desc_files_backup.desc_files_backup(job_data)
-
-    elif backup_type == 'inc_files':
-        inc_files_backup.inc_files_backup(job_data)
+    elif backup_type == 'clickhouse':
+        try:
+            clickhouse = ClickHouse(job_data)
+            clickhouse.do_backup()
+        except general_function.MyError as e:
+            log_and_mail.writelog('INFO', f"Failed to create backup for job '{job_name}' with the next error:\n"
+                                          f"  {e.message}", config.filelog_fd, job_name)
 
     else:
         external_backup.external_backup(job_data)
