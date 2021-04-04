@@ -126,7 +126,7 @@ def get_mount_data(current_storage_data):
     if re.match('(debian|ubuntu)', dist, re.I):
         family_os = 'deb'
         general_check_packet_cmd = 'dpkg -s'
-    elif re.match('centos', dist, re.I):
+    elif re.match('(centos|Scientific Linux)', dist, re.I):
         family_os = 'rpm'
         general_check_packet_cmd = 'rpm -q'
     else:
